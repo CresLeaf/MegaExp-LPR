@@ -1,0 +1,5 @@
+path: dataset/CRPD_split
+train: dataset/CRPD_split/images/train
+val: dataset/CRPD_split/images/val
+nc: 1
+names: ['车牌']

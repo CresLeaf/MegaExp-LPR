@@ -67,9 +67,11 @@ def reference_fst() -> Tuple[k2.Fsa, dict]:
         "<blank>": 0,
     }
 
+    provinces = ["京", "津", "冀"]  # TODO: Add more provinces
+
     # Add all possible characters from the pattern
     all_chars = set()
-    all_chars.update(["京", "津", "冀"])  # TODO: Add more provinces
+    all_chars.update(provinces)
     all_chars.update(string.ascii_uppercase)
     all_chars.update(string.digits)
     all_chars.add("\n")
@@ -83,8 +85,8 @@ def reference_fst() -> Tuple[k2.Fsa, dict]:
     # 4-9=after 1-6 alphanumerics, 10=final
     arcs = []
 
-    # Start state
-    for province in ["京", "津", "冀"]:
+    # Start from provinces
+    for province in provinces:
         arcs.append(
             [0, 1, character_map[province], 0]
         )  # From state 0 to state 1 with province char
