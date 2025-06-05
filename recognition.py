@@ -200,3 +200,18 @@ class RegexConstrainedCTCDecoder(nn.Module):
                 pass
 
         return results
+
+
+class RecognitionModel(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(RecognitionModel, self).__init__()
+        self.encoder = CNNEncoder(input_size, hidden_size)
+        self.decoder = RegexConstrainedCTCDecoder(hidden_size, hidden_size, output_size)
+
+    def forward(self, x):
+        encoded_features = self.encoder(x)
+        logits = self.decoder(encoded_features)
+        return logits
+
+    def decode(self, logits, beam_size=5):
+        return self.decoder.decode(logits, beam_size)

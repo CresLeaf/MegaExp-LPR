@@ -3,9 +3,16 @@ import os
 import torch
 from typing import Dict, Any, List
 from pathlib import Path
+from dataclasses import dataclass
 
 
-def segment(detections: Dict[str, dict]) -> None:
+@dataclass
+class SegmentConfig:
+    root_dir: str
+    target_dir: str = "segments"
+
+
+def segment(config: SegmentConfig, detections: Dict[str, dict]) -> None:
     """
     Segment the detections into individual license plate images.
 
@@ -31,14 +38,11 @@ def segment(detections: Dict[str, dict]) -> None:
                 print(f"Empty segment for {img_path} at index {i}")
                 continue
             # Save the segmented plate image
-            output_path = path.parent / "segmented_plates" / path.name
+            output_path = Path(config.root_dir) / config.target_dir / path.name
             os.makedirs(output_path.parent, exist_ok=True)
             cv2.imwrite(
-                output_path.with_stem(path.stem + f"_plate_{i}"), segmented_plate
+                output_path.with_stem(f"{path.stem}_plate_{i}"), segmented_plate
             )
-        print(
-            f"Segmented plates saved for {img_path} in {output_path.parent / 'segmented_plates'}"
-        )
 
 
 class SegmentLoader(torch.utils.data.Dataset):
