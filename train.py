@@ -207,14 +207,12 @@ class LicensePlateSegmentDataset(Dataset):
         root_dir: str,
         split: str = "train",
         transform: Optional[transforms.Compose] = None,
-        char_to_idx: Optional[dict] = None,
     ):
         """
         Args:
             root_dir: Root directory containing segments folder
             split: 'train' or 'val'
-            transform: Image transformations
-            char_to_idx: Character to index mapping for encoding
+            transform: Image transformations to apply
         """
         self.root_dir = root_dir
         self.split = split
@@ -347,14 +345,14 @@ def create_dataloaders(
         root_dir=root_dir,
         split="train",
         transform=transforms_dict["train"],
-        char_to_idx=char_to_idx,
+        # char_to_idx=char_to_idx,
     )
 
     val_dataset = LicensePlateSegmentDataset(
         root_dir=root_dir,
         split="val",
         transform=transforms_dict["val"],
-        char_to_idx=train_dataset.char_to_idx,  # Use same mapping
+        # char_to_idx=train_dataset.char_to_idx,  # Use same mapping
     )
 
     # Create dataloaders
@@ -376,7 +374,7 @@ def create_dataloaders(
         pin_memory=True,
     )
 
-    char_to_idx, idx_to_char = train_dataset.get_char_mapping()
+    # char_to_idx, idx_to_char = train_dataset.get_char_mapping()
 
     print(f"Dataset loaded:")
     print(f"  Training samples: {len(train_dataset)}")
@@ -421,7 +419,7 @@ if __name__ == "__main__":
             start_idx = 0
             end_idx = target_lengths[0].item()
             first_target = targets[start_idx:end_idx]
-            decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
+            # decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
             print(f"First sample target: {decoded}")
             break
 
