@@ -379,7 +379,7 @@ def create_dataloaders(
     print(f"Dataset loaded:")
     print(f"  Training samples: {len(train_dataset)}")
     print(f"  Validation samples: {len(val_dataset)}")
-    print(f"  Character vocabulary size: {len(char_to_idx)}")
+    # print(f"  Character vocabulary size: {len(char_to_idx)}")
     print(f"  Batch size: {batch_size}")
 
     return train_loader, val_loader, char_to_idx, idx_to_char
