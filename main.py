@@ -5,9 +5,9 @@ import argparse
 import os
 from pathlib import Path
 
+from detection import LicensePlateDetector
 from recognition import RecognitionModel
 from training import train_license_plate_model
-from dataloader import SegmentLoader
 
 
 def create_recognition_dataset(data_dir: str, batch_size: int = 32):
@@ -15,8 +15,8 @@ def create_recognition_dataset(data_dir: str, batch_size: int = 32):
     # You'll need to implement a proper dataset class that loads segmented license plates
     # and their corresponding text labels
 
-    train_dir = Path(data_dir) / "train" / "segmented_plates"
-    val_dir = Path(data_dir) / "val" / "segmented_plates"
+    train_dir = Path(data_dir) / "segments" / "train"
+    val_dir = Path(data_dir) / "segments" / "val"
 
     # For now, using the SegmentLoader as a base
     # You'll need to extend this to include text labels
@@ -96,3 +96,18 @@ def train_recognition_model(args):
     print(f"Model saved to: {args.save_dir}")
 
     return trained_model, history
+
+
+def main():
+    dataset_desc = "datasets/CRPD_split"
+
+    detector = LicensePlateDetector(model_path="yolo_model.pt")
+
+    detections = detector.detect_batch(image_path=dataset_desc)
+
+    detector.segment(detections)
+
+    train_loader, val_loader = create_recognition_dataset(
+        dataset_desc,
+        batch_size=32,
+    )

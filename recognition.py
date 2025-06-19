@@ -67,12 +67,46 @@ def reference_fst() -> Tuple[k2.Fsa, dict]:
         "<blank>": 0,
     }
 
-    provinces = ["京", "津", "冀"]  # TODO: Add more provinces
+    provinces = [
+        "云",
+        "京",
+        "冀",
+        "吉",
+        "宁",
+        "川",
+        "新",
+        "晋",
+        "桂",
+        "沪",
+        "津",
+        "浙",
+        "渝",
+        "湘",
+        "琼",
+        "甘",
+        "皖",
+        "粤",
+        "苏",
+        "蒙",
+        "藏",
+        "豫",
+        "贵",
+        "赣",
+        "辽",
+        "鄂",
+        "闽",
+        "陕",
+        "青",
+        "鲁",
+        "黑",
+    ]  # All standard provinces in China, sorted, do not reorder
 
     # Add all possible characters from the pattern
     all_chars = set()
     all_chars.update(provinces)
-    all_chars.update(string.ascii_uppercase)
+    all_chars.update(
+        string.ascii_uppercase.replace("O", "").replace("I", "")
+    )  # Uppercase letters
     all_chars.update(string.digits)
     all_chars.add("\n")
 

@@ -6,21 +6,20 @@ Supports both offline batch processing and single image detection.
 """
 
 import os
-import json
+import cv2
 from pathlib import Path
 from typing import List, Dict, Union, Optional, Tuple
 from tqdm import tqdm
 
 import torch
 from ultralytics import YOLO
+import utils
 
 
 class LicensePlateDetector:
     """
     License plate detector using YOLO models.
     """
-
-    VALID_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"]
 
     def __init__(self, model_path: str):
         """
@@ -32,39 +31,8 @@ class LicensePlateDetector:
         self.model = YOLO(model_path)
         self.model_path = model_path
 
-    def _get_image_files(self, path: Union[str, Path]) -> List[Path]:
-        """
-        Get list of image files from path (file or directory).
-
-        Args:
-            path: Path to image file or directory containing images
-
-        Returns:
-            List of Path objects for valid image files
-
-        Raises:
-            ValueError: If path is invalid or no images found
-        """
-        input_path = Path(path)
-
-        if input_path.is_file():
-            if input_path.suffix.lower() not in self.VALID_IMAGE_EXTENSIONS:
-                raise ValueError(f"Unsupported image format: {input_path.suffix}")
-            return [input_path]
-        elif input_path.is_dir():
-            image_files = [
-                f
-                for f in input_path.glob("**/*")
-                if f.suffix.lower() in self.VALID_IMAGE_EXTENSIONS
-            ]
-            if not image_files:
-                raise ValueError(f"No valid image files found in directory: {path}")
-            return image_files
-        else:
-            raise ValueError(f"Invalid path: {path}")
-
     def detect_single_image(
-        self, image_path: Union[str, Path], conf_threshold: float = 0.25
+        self, image_path: Union[str, Path], conf_threshold: float = 0.8
     ) -> List[Dict]:
         """
         Detect license plates in a single image.
@@ -106,7 +74,7 @@ class LicensePlateDetector:
     def detect_batch(
         self,
         image_path: Union[str, Path],
-        conf_threshold: float = 0.25,
+        conf_threshold: float = 0.8,
         show_progress: bool = True,
     ) -> Dict[str, List[Dict]]:
         """
@@ -120,7 +88,7 @@ class LicensePlateDetector:
         Returns:
             Dictionary mapping image paths to detection results
         """
-        image_files = self._get_image_files(image_path)
+        image_files = utils.get_image_files(image_path)
         results_dict = {}
 
         iterator = (
@@ -135,37 +103,37 @@ class LicensePlateDetector:
 
         return results_dict
 
-    def save_results(
-        self,
-        results: Dict[str, List[Dict]],
-        output_path: Union[str, Path],
-        separate_files: bool = False,
-    ) -> None:
+    def segment(detections: Dict[str, dict]) -> None:
         """
-        Save detection results to JSON file(s).
+        Segment the detections into individual license plate images.
 
         Args:
-            results: Detection results dictionary
-            output_path: Path for output JSON file
-            separate_files: Whether to save separate JSON for each image
+            detections (Dict[str, Any]): Detection indexed by image paths.
+
+        Effects:
+            Save segmented license plate images to disk.
         """
-        output_path = Path(output_path)
-
-        # Ensure output directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if separate_files:
-            output_dir = output_path.parent
-            for img_path, detections in results.items():
-                img_name = Path(img_path).stem
-                json_file = output_dir / f"{img_name}_detection.json"
-
-                with open(json_file, "w", encoding="utf-8") as f:
-                    json.dump({img_path: detections}, f, ensure_ascii=False, indent=2)
-
-        # Always save combined results
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
+        for img_path, detection in detections.items():
+            img = cv2.imread(img_path)
+            path = Path(img_path)
+            if img is None:
+                print(f"Error reading image {img_path}")
+                continue
+            for i, box in enumerate(detection.get("boxes", [])):
+                x1, y1, x2, y2 = box["bbox"]
+                # Ensure coordinates are within image bounds
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(img.shape[1], x2), min(img.shape[0], y2)
+                segmented_plate = img[y1:y2, x1:x2]
+                if segmented_plate.size == 0:
+                    print(f"Empty segment for {img_path} at index {i}")
+                    continue
+                # Save the segmented plate image
+                output_path = path.parent / "segments" / path.name
+                os.makedirs(output_path.parent, exist_ok=True)
+                cv2.imwrite(
+                    output_path.with_stem(f"{path.stem}_plate_{i}"), segmented_plate
+                )
 
     def visualize_results(
         self,
