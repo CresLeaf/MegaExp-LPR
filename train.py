@@ -1,3 +1,12 @@
+import os
+import torch
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import torchvision.transforms as transforms
+from typing import Tuple, List, Optional
+from training import train_license_plate_model
+from recognition import RecognitionModel
+
 """
 Old labels:
     1st: To figure out
@@ -189,14 +198,6 @@ def segment_train(description: str) -> None:
                         val_segments / convert_labels(img_path.stem)
                     ).with_suffix(".png")
                     cv2.imwrite(str(segment_filename), segment)
-
-
-import os
-import torch
-from torch.utils.data import Dataset, DataLoader
-from PIL import Image
-import torchvision.transforms as transforms
-from typing import Tuple, List, Optional
 
 
 class LicensePlateSegmentDataset(Dataset):
@@ -405,24 +406,33 @@ if __name__ == "__main__":
     # Example usage
     root_dir = "datasets/CRPD_split"  # Adjust path as needed
 
-    try:
-        train_loader, val_loader, char_to_idx, idx_to_char = load_license_plate_data(
-            root_dir, batch_size=16
-        )
+    train_loader, val_loader, char_to_idx, idx_to_char = load_license_plate_data(
+        root_dir, batch_size=16
+    )
 
-        # Test loading a batch
-        for images, targets, target_lengths in train_loader:
-            print(f"Batch shape: {images.shape}")
-            print(f"Targets shape: {targets.shape}")
-            print(f"Target lengths: {target_lengths}")
+    # Test loading a batch
+    for images, targets, target_lengths in train_loader:
+        print(f"Batch shape: {images.shape}")
+        print(f"Targets shape: {targets.shape}")
+        print(f"Target lengths: {target_lengths}")
 
-            # Decode first sample
-            start_idx = 0
-            end_idx = target_lengths[0].item()
-            first_target = targets[start_idx:end_idx]
-            # decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
-            print(f"First sample target: {first_target.tolist()}")
-            break
+        # Decode first sample
+        start_idx = 0
+        end_idx = target_lengths[0].item()
+        first_target = targets[start_idx:end_idx]
+        # decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
+        print(f"First sample target: {first_target.tolist()}")
+        break
 
-    except Exception as e:
-        print(f"Error loading data: {e}")
+    # Invoke training
+    model = RecognitionModel(input_size=3, hidden_size=256, output_size=20)
+    train_license_plate_model(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        char_to_idx=char_to_idx,
+        idx_to_char=idx_to_char,
+        num_epochs=10,
+        learning_rate=0.001,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
