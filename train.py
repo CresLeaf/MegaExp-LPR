@@ -241,7 +241,7 @@ class LicensePlateSegmentDataset(Dataset):
 
             # Parse the target string - assuming format like "0_1_32_3_3"
             # Each number/character separated by underscore
-            target_chars = map(int, target_str.split("_"))
+            target_chars = list(map(int, target_str.split("_")))
 
             if target_chars:  # Only add if we successfully parsed the target
                 image_path = os.path.join(self.data_dir, filename)
