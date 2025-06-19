@@ -278,7 +278,7 @@ class LicensePlateSegmentDataset(Dataset):
 
     def get_char_mapping(self) -> Tuple[dict, dict]:
         """Return character mappings"""
-        return self.char_to_idx, self.idx_to_char
+        return None, None
 
 
 def collate_fn(batch) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
