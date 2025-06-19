@@ -191,11 +191,239 @@ def segment_train(description: str) -> None:
                     cv2.imwrite(str(segment_filename), segment)
 
 
-def main():
-    description = "crpd.yml"
-    segment_train(description)
-    print("Dataset segmentation completed.")
+import os
+import torch
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import torchvision.transforms as transforms
+from typing import Tuple, List, Optional
+
+
+class LicensePlateSegmentDataset(Dataset):
+    """Dataset for license plate character segments"""
+
+    def __init__(
+        self,
+        root_dir: str,
+        split: str = "train",
+        transform: Optional[transforms.Compose] = None,
+        char_to_idx: Optional[dict] = None,
+    ):
+        """
+        Args:
+            root_dir: Root directory containing segments folder
+            split: 'train' or 'val'
+            transform: Image transformations
+            char_to_idx: Character to index mapping for encoding
+        """
+        self.root_dir = root_dir
+        self.split = split
+        self.data_dir = os.path.join(root_dir, "segments", split)
+        self.transform = transform
+
+        # Load image paths and extract targets from filenames
+        self.samples = self._load_samples()
+
+        if not self.samples:
+            raise ValueError(f"No samples found in {self.data_dir}")
+
+    def _load_samples(self) -> List[Tuple[str, List[int]]]:
+        """Load image paths and extract targets from filenames"""
+        samples = []
+
+        if not os.path.exists(self.data_dir):
+            raise ValueError(f"Directory does not exist: {self.data_dir}")
+
+        for filename in os.listdir(self.data_dir):
+            if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+
+            # Extract target from filename (remove extension)
+            target_str = os.path.splitext(filename)[0]
+
+            # Parse the target string - assuming format like "0_1_32_3_3"
+            # Each number/character separated by underscore
+            target_chars = map(int, target_str.split("_"))
+
+            if target_chars:  # Only add if we successfully parsed the target
+                image_path = os.path.join(self.data_dir, filename)
+                samples.append((image_path, target_chars))
+
+        return samples
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        """
+        Returns:
+            image: Transformed image tensor
+            target: Target sequence as tensor
+            target_length: Length of target sequence
+        """
+        image_path, target_indices = self.samples[idx]
+
+        # Load image
+        image = Image.open(image_path).convert("RGB")
+
+        # Apply transformations
+        if self.transform:
+            image = self.transform(image)
+
+        # Convert target to tensor
+        target = torch.tensor(target_indices, dtype=torch.long)
+        target_length = len(target_indices)
+
+        return image, target, target_length
+
+    def get_char_mapping(self) -> Tuple[dict, dict]:
+        """Return character mappings"""
+        return self.char_to_idx, self.idx_to_char
+
+
+def collate_fn(batch) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Custom collate function for variable length sequences"""
+    images, targets, target_lengths = zip(*batch)
+
+    # Stack images
+    images = torch.stack(images, dim=0)
+
+    # Handle variable length targets
+    target_lengths = torch.tensor(target_lengths, dtype=torch.long)
+
+    # Concatenate all targets into a single tensor (CTC requirement)
+    targets = torch.cat(targets, dim=0)
+
+    return images, targets, target_lengths
+
+
+def get_default_transforms(image_size: Tuple[int, int] = (32, 128)) -> dict:
+    """Get default image transformations for training and validation"""
+
+    train_transform = transforms.Compose(
+        [
+            transforms.Resize(image_size),
+            transforms.ColorJitter(
+                brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1
+            ),
+            transforms.RandomAffine(
+                degrees=2, translate=(0.05, 0.05), scale=(0.95, 1.05)
+            ),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    val_transform = transforms.Compose(
+        [
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    return {"train": train_transform, "val": val_transform}
+
+
+def create_dataloaders(
+    root_dir: str,
+    batch_size: int = 32,
+    image_size: Tuple[int, int] = (32, 128),
+    num_workers: int = 4,
+    char_to_idx: Optional[dict] = None,
+) -> Tuple[DataLoader, DataLoader, dict, dict]:
+    """
+    Create train and validation dataloaders
+
+    Returns:
+        train_loader, val_loader, char_to_idx, idx_to_char
+    """
+
+    # Get transforms
+    transforms_dict = get_default_transforms(image_size)
+
+    # Create datasets
+    train_dataset = LicensePlateSegmentDataset(
+        root_dir=root_dir,
+        split="train",
+        transform=transforms_dict["train"],
+        char_to_idx=char_to_idx,
+    )
+
+    val_dataset = LicensePlateSegmentDataset(
+        root_dir=root_dir,
+        split="val",
+        transform=transforms_dict["val"],
+        char_to_idx=train_dataset.char_to_idx,  # Use same mapping
+    )
+
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
+
+    char_to_idx, idx_to_char = train_dataset.get_char_mapping()
+
+    print(f"Dataset loaded:")
+    print(f"  Training samples: {len(train_dataset)}")
+    print(f"  Validation samples: {len(val_dataset)}")
+    print(f"  Character vocabulary size: {len(char_to_idx)}")
+    print(f"  Batch size: {batch_size}")
+
+    return train_loader, val_loader, char_to_idx, idx_to_char
+
+
+# Example usage function
+def load_license_plate_data(root_dir: str, batch_size: int = 32):
+    """
+    Convenience function to load license plate segment data
+
+    Args:
+        root_dir: Path to directory containing segments/{train,val}/ folders
+        batch_size: Batch size for training
+
+    Returns:
+        train_loader, val_loader, char_to_idx, idx_to_char
+    """
+    return create_dataloaders(root_dir, batch_size=batch_size)
 
 
 if __name__ == "__main__":
-    main()
+    # Example usage
+    root_dir = "datasets/CRPD_split"  # Adjust path as needed
+
+    try:
+        train_loader, val_loader, char_to_idx, idx_to_char = load_license_plate_data(
+            root_dir, batch_size=16
+        )
+
+        # Test loading a batch
+        for images, targets, target_lengths in train_loader:
+            print(f"Batch shape: {images.shape}")
+            print(f"Targets shape: {targets.shape}")
+            print(f"Target lengths: {target_lengths}")
+
+            # Decode first sample
+            start_idx = 0
+            end_idx = target_lengths[0].item()
+            first_target = targets[start_idx:end_idx]
+            decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
+            print(f"First sample target: {decoded}")
+            break
+
+    except Exception as e:
+        print(f"Error loading data: {e}")
