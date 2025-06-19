@@ -375,6 +375,7 @@ def create_dataloaders(
     )
 
     # char_to_idx, idx_to_char = train_dataset.get_char_mapping()
+    char_to_idx, idx_to_char = {}, {}
 
     print(f"Dataset loaded:")
     print(f"  Training samples: {len(train_dataset)}")
@@ -420,7 +421,7 @@ if __name__ == "__main__":
             end_idx = target_lengths[0].item()
             first_target = targets[start_idx:end_idx]
             # decoded = "".join([idx_to_char[idx.item()] for idx in first_target])
-            print(f"First sample target: {decoded}")
+            print(f"First sample target: {first_target.tolist()}")
             break
 
     except Exception as e:
