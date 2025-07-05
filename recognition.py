@@ -1,14 +1,34 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import k2
+from flashlight.lib.text.decoder import (
+    LexiconFreeDecoder,
+    LexiconFreeDecoderOptions,
+    ZeroLM,
+    CriterionType,
+)
+
 import string
 from typing import Tuple
 
+digits = "0123456789"
+letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"  # O and I removed to avoid confusion with 0 and 1
+assert len(letters) == 24, (
+    "There should be 24 letters in the alphabet (excluding O and I)"
+)
+province_codes = [
+    "京津冀晋蒙辽吉黑沪苏浙皖闽赣鲁豫鄂湘粤桂琼渝川贵云藏陕甘青宁新",
+]  # 31 province codes except Hong Kong, Macau, and Taiwan
+assert len(province_codes[0]) == 31, (
+    "There should be 31 province codes including Hong Kong, Macau, and Taiwan"
+)
 
-class CNNEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(CNNEncoder, self).__init__()
+default_vocab = ["_"] + list(digits) + list(letters) + list(province_codes[0])
+
+
+class CRNNEncoder(nn.Module):
+    def __init__(self, input_size, hidden_size, step_width, output_size):
+        super(CRNNEncoder, self).__init__()
         self.conv1 = nn.Conv2d(input_size, hidden_size, kernel_size=(3, 3), padding=1)
         self.conv2 = nn.Conv2d(hidden_size, hidden_size, kernel_size=(3, 3), padding=1)
         self.conv3 = nn.Conv2d(hidden_size, hidden_size, kernel_size=(3, 3), padding=1)
@@ -22,7 +42,16 @@ class CNNEncoder(nn.Module):
         # Channel adjustment layers to balance feature importance
         self.channel_adj1 = nn.Conv2d(hidden_size, hidden_size // 2, kernel_size=1)
         self.channel_adj2 = nn.Conv2d(hidden_size, hidden_size // 2, kernel_size=1)
-        self.channel_adj3 = nn.Conv2d(hidden_size, hidden_size, kernel_size=1)
+        self.channel_adj3 = nn.Conv2d(hidden_size, hidden_size // 2, kernel_size=1)
+
+        # Calculate the actual input size for LSTM
+        lstm_input_width = 3 * (hidden_size // 2)
+
+        self.lstm = nn.LSTM(
+            lstm_input_width, step_width, bidirectional=True, batch_first=True
+        )
+        # For bidirectional LSTM, hidden size is doubled
+        self.fc = nn.Linear(step_width * 2, output_size)
 
     def forward(self, x):
         # First level features
@@ -57,195 +86,98 @@ class CNNEncoder(nn.Module):
         # This format is suitable for the LSTM in the decoder
         x_concat = x_concat.transpose(1, 2)
 
-        return x_concat
-
-
-def reference_fst() -> Tuple[k2.Fsa, dict]:
-    # Create character to index mapping
-    # Start with blank token and special characters
-    character_map = {
-        "<blank>": 0,
-    }
-
-    provinces = [
-        "云",
-        "京",
-        "冀",
-        "吉",
-        "宁",
-        "川",
-        "新",
-        "晋",
-        "桂",
-        "沪",
-        "津",
-        "浙",
-        "渝",
-        "湘",
-        "琼",
-        "甘",
-        "皖",
-        "粤",
-        "苏",
-        "蒙",
-        "藏",
-        "豫",
-        "贵",
-        "赣",
-        "辽",
-        "鄂",
-        "闽",
-        "陕",
-        "青",
-        "鲁",
-        "黑",
-    ]  # All standard provinces in China, sorted, do not reorder
-
-    # Add all possible characters from the pattern
-    all_chars = set()
-    all_chars.update(provinces)
-    all_chars.update(
-        string.ascii_uppercase.replace("O", "").replace("I", "")
-    )  # Uppercase letters
-    all_chars.update(string.digits)
-    all_chars.add("\n")
-
-    # Map characters to indices (starting from 1 since 0 is blank)
-    for idx, char in enumerate(sorted(all_chars), start=1):
-        character_map[char] = idx
-
-    # Build FSA using k2
-    # States: 0=start, 1=after province, 2=after letter, 3=optional newline,
-    # 4-9=after 1-6 alphanumerics, 10=final
-    arcs = []
-
-    # Start from provinces
-    for province in provinces:
-        arcs.append(
-            [0, 1, character_map[province], 0]
-        )  # From state 0 to state 1 with province char
-
-    # After province, expect a letter
-    for letter in string.ascii_uppercase:
-        arcs.append(
-            [1, 2, character_map[letter], 0]
-        )  # From state 1 to state 2 with uppercase letter
-
-    # After letter, optional newline
-    arcs.append([2, 3, character_map.get("\n", 0), 0])  # Optional newline
-    arcs.append([2, 4, 0, 0])  # Skip newline, epsilon transition
-
-    # From newline state, start alphanumeric sequence
-    for char in string.ascii_uppercase + string.digits:
-        arcs.append([3, 4, character_map[char], 0])  # First alphanumeric
-
-    # Alphanumeric sequence states (5-6 characters)
-    for i in range(4, 9):  # States 4-8 (for positions 1-5)
-        for char in string.ascii_uppercase + string.digits:
-            arcs.append([i, i + 1, character_map[char], 0])  # Next alphanumeric
-
-    # Make states 9 and 10 final (5 or 6 characters)
-    arcs.append([9, 10, 0, 0])  # Epsilon to final state
-    arcs.append([10, -1, -1, 0])  # Final state marker
-
-    # Convert to k2 format
-    arcs_tensor = torch.tensor(arcs, dtype=torch.int32)
-    fsa = k2.Fsa.from_tensor(arcs_tensor)
-
-    # Add necessary properties
-    fsa.requires_grad_(False)
-    fsa = k2.arc_sort(fsa)
-
-    return fsa, character_map
-
-
-class RegexConstrainedCTCDecoder(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(RegexConstrainedCTCDecoder, self).__init__()
-        self.lstm = nn.LSTM(
-            input_size, hidden_size, bidirectional=True, batch_first=True
-        )
-        # For bidirectional LSTM, hidden size is doubled
-        self.fc = nn.Linear(hidden_size * 2, output_size)
-
-        # Create character-to-index mapping
-        self.output_size = output_size
-        self.blank_idx = 0  # CTC blank token index
-        self.constraint_fsa, self.alphabet = reference_fst()
-
-    def forward(self, x):
         # BiLSTM forward pass
-        lstm_out, _ = self.lstm(x)
+        lstm_out, _ = self.lstm(x_concat)
         # Project to output size
         logits = self.fc(lstm_out)
+
         return logits
 
-    def decode(self, logits, beam_size=5):
-        """
-        Decode using constrained CTC prefix beam search
-        """
-        # Apply log softmax to get log probabilities
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
-        # Convert to dense log probs for k2 (batch size 1 for simplicity)
-        batch_size = log_probs.size(0)
+class Decoder:
+    def __init__(
+        self,
+        vocab=None,
+        blank_id=0,
+        beam_width=25,
+        beam_size_token=10,
+        beam_threshold=20.0,
+    ):
+        # Define your vocabulary (must match model training)
+        # blank token is index 0 by convention for CTC
+        if vocab is None:
+            vocab = default_vocab
+
+        self.vocab = vocab
+        self.blank_id = blank_id
+        self.beam_width = beam_width
+
+        # Setup decoder options
+        self.decoder_options = LexiconFreeDecoderOptions(
+            beam_size=beam_width,
+            beam_size_token=beam_size_token,
+            beam_threshold=beam_threshold,
+            lm_weight=0.0,
+            sil_score=0.0,
+            log_add=False,
+            criterion_type=CriterionType.CTC,
+        )
+
+        # Create decoder
+        self.decoder = LexiconFreeDecoder(
+            self.decoder_options,
+            lm=ZeroLM(),  # No language model
+            sil_token_idx=-1,  # No silence token in CTC
+            blank_token_idx=blank_id,
+            transitions=[],  # No transitions for CTC
+        )
+
+    def decode(self, logits: torch.Tensor) -> str:
+        # Convert logits to log probabilities
+        log_probs = F.log_softmax(logits, dim=2)
+
+        # Flashlight expects emissions in format [Time, Batch, Vocab]
+        # Current format is [Batch, Time, Vocab]
+        emissions = log_probs.transpose(0, 1).contiguous()
+
+        # Decode for each item in batch (assuming batch_size = 1)
+        batch_size = emissions.size(1)
         results = []
 
-        for i in range(batch_size):
-            sequence_log_probs = log_probs[i].cpu()
+        for b in range(batch_size):
+            # Get emissions for this batch item
+            batch_emissions = emissions[:, b, :].cpu()
 
-            # Create a lattice/FSA from the log probs
-            supervision = k2.SupervisionSegment(0, 0, sequence_log_probs.size(0))
-            supervision_segments = torch.tensor(
-                [[0, 0, sequence_log_probs.size(0)]], dtype=torch.int32
+            # Decode
+            decoded = self.decoder.decode(
+                batch_emissions.data_ptr(),
+                batch_emissions.size(0),
+                batch_emissions.size(1),
             )
 
-            # Convert log probs to dense FSA
-            dense_fsa = k2.DenseFsaVec(
-                sequence_log_probs.unsqueeze(0), supervision_segments
-            )
-
-            # If we have a constraint, apply it
-            if self.constraint_fsa is not None:
-                # Intersect dense FSA with constraint FSA
-                lattice = k2.intersect_dense(
-                    dense_fsa, self.constraint_fsa, output_beam=beam_size
-                )
-
-                # Find the best path
-                best_path = k2.shortest_path(lattice, use_double_scores=True)
-
-                # Convert path to labels, removing blanks and duplicates
-                labels = []
-                prev = -1
-                for arc in best_path.arcs.values():
-                    label = arc.label.item()
-                    if label != 0 and label != prev:  # Skip blanks and duplicates
-                        labels.append(label)
-                    prev = label
-
-                # Convert indices back to characters
-                idx_to_char = {v: k for k, v in self.alphabet.items()}
-                text = "".join(idx_to_char.get(l, "") for l in labels)
-                results.append(text)
+            if decoded:
+                # Get best hypothesis
+                best_hyp = decoded[0]
+                # Convert token indices to string
+                tokens = []
+                for token_idx in best_hyp.tokens:
+                    if token_idx < len(self.vocab):
+                        tokens.append(self.vocab[token_idx])
+                result = "".join(tokens)
+                results.append(result)
             else:
-                # Regular CTC decoding without constraints
-                # ...
-                pass
+                results.append("")
 
-        return results
+        return results[0] if results else ""
 
 
-class RecognitionModel(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(RecognitionModel, self).__init__()
-        self.encoder = CNNEncoder(input_size, hidden_size)
-        self.decoder = RegexConstrainedCTCDecoder(hidden_size, hidden_size, output_size)
+class Reco(nn.Module):
+    def __init__(self, input_size, hidden_size, step_width, output_size, vocab=None):
+        super(Reco, self).__init__()
+        self.encoder = CRNNEncoder(input_size, hidden_size, step_width, output_size)
+        self.decoder = Decoder(vocab=vocab)
 
-    def forward(self, x):
-        encoded_features = self.encoder(x)
-        logits = self.decoder(encoded_features)
-        return logits
-
-    def decode(self, logits, beam_size=5):
-        return self.decoder.decode(logits, beam_size)
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, str]:
+        logits = self.encoder(x)
+        decoded_str = self.decoder.decode(logits)
+        return logits, decoded_str

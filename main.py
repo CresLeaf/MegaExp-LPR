@@ -5,41 +5,49 @@ import argparse
 import os
 from pathlib import Path
 
+from dataloader import IndexedDataset, SpareDataset, labelled_segment
 from detection import LicensePlateDetector
-from recognition import RecognitionModel
+from recognition import Reco, default_vocab
 from training import train_license_plate_model
 
+default_args = {
+    "batch_size": 1,
+    "num_workers": 4,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "epochs": 50,
+    "save_dir": "models/recognition",
+    "patience": 5,
+    "model": None,
+    "train_dataset": None,
+    "val_dataset": None,
+}
 
-def create_recognition_dataset(data_dir: str, batch_size: int = 32):
-    """Create training and validation datasets for recognition model"""
-    # You'll need to implement a proper dataset class that loads segmented license plates
-    # and their corresponding text labels
 
-    train_dir = Path(data_dir) / "segments" / "train"
-    val_dir = Path(data_dir) / "segments" / "val"
-
-    # For now, using the SegmentLoader as a base
-    # You'll need to extend this to include text labels
-    train_dataset = SegmentLoader(str(train_dir))
-    val_dataset = SegmentLoader(str(val_dir))
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True,
+def prepare(args):
+    val_dataset = IndexedDataset(
+        csv_path="datasets/CLPD/CLPD.csv",
+        root_dir="datasets/CLPD/",
+        transform=labelled_segment,
     )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True,
+    train_dataset = SpareDataset(
+        root_dir="datasets/train",
+        transform=labelled_segment,
     )
 
-    return train_loader, val_loader
+    model = Reco(
+        input_size=3,  # Assuming RGB images
+        hidden_size=64,
+        step_width=64,
+        output_size=len(default_vocab),  # Size of the vocabulary
+    )
+
+    args["train_dataset"] = train_dataset
+    args["val_dataset"] = val_dataset
+    args["model"] = model
+
+    return args
 
 
 def train_recognition_model(args):
@@ -50,44 +58,30 @@ def train_recognition_model(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Model parameters
-    input_size = 3  # RGB channels
-    hidden_size = 256
-    # Output size should match your character vocabulary
-    # Based on recognition.py, this includes provinces + letters + digits + special chars
-    output_size = 50  # Adjust based on your actual vocabulary size
-
-    # Create model
-    model = RecognitionModel(
-        input_size=input_size, hidden_size=hidden_size, output_size=output_size
+    train_loader = DataLoader(
+        args["train_dataset"],
+        batch_size=args["batch_size"],
+        shuffle=True,
+        num_workers=args["num_workers"],
+        pin_memory=True,
     )
-
-    print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-
-    # Create data loaders
-    try:
-        train_loader, val_loader = create_recognition_dataset(
-            args.data_dir, batch_size=args.batch_size
-        )
-        print(f"Training samples: {len(train_loader.dataset)}")
-        print(f"Validation samples: {len(val_loader.dataset)}")
-    except Exception as e:
-        print(f"Error creating datasets: {e}")
-        print("Please ensure your data directory structure is correct:")
-        print("  data_dir/train/segmented_plates/")
-        print("  data_dir/val/segmented_plates/")
-        return None
-
+    val_loader = DataLoader(
+        args["val_dataset"],
+        batch_size=args["batch_size"],
+        shuffle=False,
+        num_workers=args["num_workers"],
+        pin_memory=True,
+    )
     # Train the model
     trained_model, history = train_license_plate_model(
-        model=model,
+        model=args["model"],
         train_loader=train_loader,
         val_loader=val_loader,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        epochs=args.epochs,
-        save_dir=args.save_dir,
-        early_stopping_patience=args.patience,
+        learning_rate=args["learning_rate"],
+        weight_decay=args["weight_decay"],
+        epochs=args["epochs"],
+        save_dir=args["save_dir"],
+        early_stopping_patience=args["patience"],
         device=device,
     )
 
@@ -98,16 +92,10 @@ def train_recognition_model(args):
     return trained_model, history
 
 
-def main():
-    dataset_desc = "datasets/CRPD_split"
+def test_train():
+    args = prepare(default_args)
+    trained_model, history = train_recognition_model(args)
 
-    detector = LicensePlateDetector(model_path="yolo_model.pt")
 
-    detections = detector.detect_batch(image_path=dataset_desc)
-
-    detector.segment(detections)
-
-    train_loader, val_loader = create_recognition_dataset(
-        dataset_desc,
-        batch_size=32,
-    )
+if __name__ == "__main__":
+    test_train()

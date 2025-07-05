@@ -4,11 +4,8 @@ import torch.optim as opt
 from torch.utils.data import DataLoader
 import time
 import os
-import yaml
-import utils
-from typing import Dict, Tuple, Optional, List, Any
+from typing import Dict, Tuple, List, Any
 import matplotlib.pyplot as plt
-import numpy as np
 
 
 def adamw_setup(model, learning_rate=0.001, weight_decay=0.01, epochs=200):
@@ -84,22 +81,15 @@ class Trainer:
         epoch_loss = 0.0
         start_time = time.time()
 
-        for batch_idx, (images, targets, target_lengths) in enumerate(
-            self.train_loader
-        ):
-            # Move to device
-            images = images.to(self.device)
-            targets = targets.to(self.device)
-            target_lengths = target_lengths.to(self.device)
+        for batch_idx, entry in enumerate(self.train_loader):
+            images = entry["image"].to(self.device)
+            targets = entry["label"].to(self.device)
+            target_lengths = entry["label_str"].to(self.device)
 
             # Forward pass - split into encoder and decoder steps
             self.optimizer.zero_grad()
 
-            # CNN encoder pass
-            features = self.model.cnn_encoder(images)
-
-            # LSTM decoder pass
-            logits = self.model.ctc_decoder(features)
+            logits = self.model.forward(images)
 
             # Calculate loss
             input_lengths = torch.full(
@@ -138,13 +128,11 @@ class Trainer:
         decoded_examples = []
 
         with torch.no_grad():
-            for batch_idx, (images, targets, target_lengths) in enumerate(
-                self.val_loader
-            ):
+            for batch_idx, entry in enumerate(self.val_loader):
                 # Move to device
-                images = images.to(self.device)
-                targets = targets.to(self.device)
-                target_lengths = target_lengths.to(self.device)
+                images = entry["image"].to(self.device)
+                targets = entry["label"].to(self.device)
+                target_lengths = entry["label_str"].to(self.device)
 
                 # Forward pass
                 features = self.model.cnn_encoder(images)

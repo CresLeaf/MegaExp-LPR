@@ -7,8 +7,15 @@ requires-python = ">=3.12"
 dependencies = [
     "graphviz>=0.20.3",
     "jaxtyping>=0.3.2",
-    "k2==1.24.4.dev20250304+cuda12.8.torch2.7.0.dev20250303-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
     "opencv-python>=4.11.0.86",
     "torch>=2.7.0",
     "ultralytics>=8.3.146",
+    "flashlight-text"
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch", marker = "'microsoft' in platform_release"}
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/nightly/cu128"
